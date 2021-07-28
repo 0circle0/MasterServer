@@ -141,7 +141,7 @@ function StartServer() {
             SetServerTimeout(serverInstance);
 
             if (!prompter.ServerOpen) {
-                //205 No Content
+                //204 No Content
                 server.to(rinfo.address, rinfo.port);
                 server.emit("status", 204);
             } else {
