@@ -2,17 +2,24 @@ require('dotenv').config();
 const express = require('express');
 const {Prompter} = require('./Prompter');
 const app = express();
-const expressPORT = 35004;
+const masterServerPort = process.env.MASTERSERVERPORT;
+const masterClientPort = process.env.MASTERCLIENTPORT;
+const masterAPIKEY = process.env.MASTERAPIKEY;
+const tickDelay = process.env.TickDelay;
+const MASTER_HASH_SALT = process.env.MASTERHASHSALT;
+const timeoutDelay = tickDelay * 2;
+const bcrypt = require('bcrypt');
+const saltRounds = 10;
 let ServerInstance = require('./ServerInstance').ServerInstance;
 let Servers = [];
 let findServerLoadStep = 10;
 let averageLoad = 0;
 let startDate = 0;
 let prompter = new Prompter();
-const MASTERAPIKEY = process.env.MASTERAPIKEY;
+
 
 let createServer = require('dgramx').createServer;
-let addr = `udp://0.0.0.0:${expressPORT}`;
+let addr = `udp://0.0.0.0:${masterServerPort}`;
 let server = createServer(addr);
 
 StartServer();
@@ -73,7 +80,7 @@ function StartServer() {
 
         server.on("relayRegister", function (msg, rinfo) {
             let req = JSON.parse(msg);
-            if (req.apikey !== MASTERAPIKEY) {
+            if (req.apikey !== masterAPIKEY) {
                 return;
             }
             let {IP, PORT, PASS, InstanceID, date} = req;
@@ -116,7 +123,7 @@ function StartServer() {
         });
         server.on("relayUpdate", function (msg, rinfo) {
             let req = JSON.parse(msg);
-            if (req.apikey !== MASTERAPIKEY)
+            if (req.apikey !== masterAPIKEY)
                 return;
 
             let {InstanceID, gamesOpen, totalGames} = req;
@@ -154,24 +161,59 @@ function StartServer() {
 
     //Express Client to Server communication
     app.use(express.json());
-    app.listen(expressPORT);
+    app.listen(masterClientPort);
 
     app.get('/server', (req, res) => {
+
+        let username = req.headers["username"];
+        if (typeof username === 'undefined' || typeof username === 'object' || username === null)
+            return;
+
+        if (!isNotEmptyString(username)) {
+            return;
+        }
+
+        //TODO Check the username
         if (!prompter.ServerOpen) {
             //204 No Content
-            res.status(204).send({server: null});
+            res.setHeader("server", "0.0.0.0");
+            res.setHeader("port", "0");
+            res.setHeader("key", "0");
+            res.setHeader("username", "");
+            res.setHeader("time", Date.now());
+            res.setHeader("login", "");
+            res.status(204).send({});
             return;
         }
         let server = FindBestServerWithLowestLoad();
         if (typeof server === 'boolean') {
             //206 Partial Content
-            res.status(206).send({server: null});
+            res.setHeader("server", "0.0.0.0");
+            res.setHeader("port", "0");
+            res.setHeader("key", "0");
+            res.setHeader("username", "");
+            res.setHeader("time", Date.now());
+            res.setHeader("login", "");
+            res.status(206).send({});
             return;
         }
-        let {IP, PORT, key} = server;
-        let obj = {IP, PORT, key};
-        //200 OK
-        res.status(200).send({server: obj});
+        if (typeof server == 'undefined')
+            return;
+
+        let TimeNow = Date.now();
+        let Complete = username + MASTER_HASH_SALT + TimeNow;
+        bcrypt.hash(Complete, saltRounds, function(err, hash) {
+            let {ip, port, key} = server;
+            res.setHeader("server", ip);
+            res.setHeader("port", port);
+            res.setHeader("key", key);
+            res.setHeader("username", username);
+            res.setHeader("time", TimeNow);
+            res.setHeader("login", hash);
+            //200 OK
+            res.status(200).send({});
+        });
+
     });
 
     function SetServerTimeout(serverInstance) {
@@ -183,8 +225,17 @@ function StartServer() {
             serverInstance.online = false;
 
             console.log('Relay Server went offline', 'IP: ', serverInstance.ip, 'Port: ', serverInstance.port, 'InstanceID: ', serverInstance.instanceID);
-        }, 2000);
+        }, timeoutDelay);
     }
+
+    function isString(value) {
+        return typeof value === 'string' || value instanceof String;
+    }
+
+    function isNotEmptyString(value) {
+        return (isString(value) && value.length > 0);
+    }
+
 
     console.log("Server started (type 'start' to allow players to connect 'stop' to not allow players to connect)");
 }
